@@ -3,11 +3,9 @@ package org.example;
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.time.LocalDateTime;
-import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.*;
 
 public class Server {
@@ -16,6 +14,9 @@ public class Server {
     BufferedReader in;
     BufferedOutputStream out;
     List<String> setVlidPaths;
+    Request request;
+
+    private ConcurrentHashMap<String, Map<String, Handler>> handlers = new ConcurrentHashMap<>();
 
     Server() throws IOException {
         serverSocket = new ServerSocket();
@@ -23,6 +24,13 @@ public class Server {
 
     public void setVlidPaths(List<String> setVlidPaths) {
         this.setVlidPaths = setVlidPaths;
+    }
+
+    public Handler findHandler(String method, String path) {
+        var methodHandlers = handlers.get(method + " " + path.substring(0, path.indexOf('.')));
+        if (methodHandlers == null) return null;
+
+        return methodHandlers.get(path.substring(0, path.indexOf('.')));
     }
 
     public void listen(int port) throws IOException {
@@ -34,7 +42,6 @@ public class Server {
         this.socket = serverSocket.accept();
         in = new BufferedReader(new InputStreamReader(this.socket.getInputStream()));
         out = new BufferedOutputStream(this.socket.getOutputStream());
-
     }
 
     public void listenPort() throws IOException {
@@ -49,51 +56,29 @@ public class Server {
                     return "result";
                 }
             });
-
         }
         executorService.shutdown();
 
-//        }
+    }
+
+    private void badRequest() throws IOException {
+        var errorHandler = findHandler("GET", "/error.html");
+        this.request.url = "/error.html";
+        errorHandler.handle();
     }
 
     public void dataHandling(String text) throws IOException {
         String requestLine = text;
-        final var parts = requestLine.split(" ");
-
+        var parts = requestLine.split(" ");
         if (parts.length == 3) {
-            final var path = parts[1];
-            if (!!this.setVlidPaths.contains(path)) {
-                final var filePath = Path.of(".", "public", path);
-                final var mimeType = Files.probeContentType(filePath);
-                // special case for classic
-                if (path.equals("/classic.html")) {
-                    final var template = Files.readString(filePath);
-                    final var content = template.replace(
-                            "{time}",
-                            LocalDateTime.now().toString()
-                    ).getBytes();
-
-                    this.write("HTTP/1.1 200 OK\r\n" +
-                            "Content-Type: " + mimeType + "\r\n" +
-                            "Content-Length: " + content.length + "\r\n" +
-                            "Connection: close\r\n" +
-                            "\r\n", content);
-
-                } else {
-                    final var length = Files.size(filePath);
-                    final var content = Files.readAllBytes(filePath);
-                    this.write("HTTP/1.1 200 OK\r\n" +
-                            "Content-Type: " + mimeType + "\r\n" +
-                            "Content-Length: " + length + "\r\n" +
-                            "Connection: close\r\n" +
-                            "\r\n", content);
-                }
-
-
+            this.request = new Request(parts[0], parts[1], text);
+            var handler = findHandler(parts[0], parts[1]);
+            if (handler != null) {
+                handler.handle();
+            } else {
+                badRequest();
             }
         }
-
-
     }
 
     public void write(String text, byte[] content) throws IOException {
@@ -109,4 +94,7 @@ public class Server {
     }
 
 
+    public void addHandler(String method, String path, Handler handler) {
+        handlers.computeIfAbsent(method + " " + path, k -> new HashMap<>()).put(path, handler);
+    }
 }
